@@ -61,15 +61,17 @@ class MMN(Simulation):
         self.schedule(0, Arrival(0, self.supermarket()))
         self.schedule(0, GetLengths(len_schedule))
 
-    def supermarket(self) -> int:
+    def supermarket(self, ifMax = False) -> int:
         # choose d random queues by their indexes
         indexes = sample(range(len(self.queues)), self.d)
         # choose the queue with the minimum length
+        if ifMax:
+            return max(indexes, key=lambda i: self.queue_len(i))
         return min(indexes, key=lambda i: self.queue_len(i)) # take min based on len of queues
 
     def schedule_arrival(self, job_id):
         # schedule the arrival following a weibull or exponential distribution (if shape = 1 -> exponential distribution)
-        self.schedule(self.arrival_gen(), Arrival(job_id, self.supermarket()))
+        self.schedule(self.arrival_gen(), Arrival(job_id, self.supermarket(ifMax=False)))
 
     def schedule_completion(self, job_id, queue_idx):
         # schedule the time of the completion event following a weibull or exponential distribution (if shape = 1 -> exponential distribution)
@@ -108,6 +110,7 @@ class Completion(Event):
         # set the completion time of the running job
         sim.completions[sim.running[self.queue_index]] = sim.t
 
+        '''
         # if the queue is not empty
         if len(sim.queues[self.queue_index]) > 0:
             # get a job from the queue
@@ -116,8 +119,22 @@ class Completion(Event):
             sim.schedule_completion(sim.running[self.queue_index], self.queue_index)
         else:
             sim.running[self.queue_index] = None
-
-
+        '''
+        # if the queue is not empty
+        if len(sim.queues[self.queue_index]) > 0:
+            # get a job from the queue
+            sim.running[self.queue_index] = sim.queues[self.queue_index].popleft()
+            # schedule its completion
+            sim.schedule_completion(sim.running[self.queue_index], self.queue_index)
+        else:  # if the queue is empty, request a job from the most loaded queue
+            max_queue = sim.supermarket(ifMax=True)
+            if max_queue != self.queue_index and len(sim.queues[max_queue]) > 0:  # if not the same queue
+                # if the most loaded queue is not empty
+                sim.running[self.queue_index] = sim.queues[max_queue].popleft()
+                sim.schedule_completion(sim.running[self.queue_index], self.queue_index)
+            else:  # if the most loaded queue is also the same as the current one, remain idle
+                sim.running[self.queue_index] = None
+        
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--lambd', type=float, default=0.0)
