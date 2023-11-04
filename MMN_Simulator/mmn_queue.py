@@ -29,8 +29,10 @@ class GetLengths(Event):
 
 class MMN(Simulation):
 
-    def __init__(self, lambd, mu, n, d, shape, len_schedule, w_track, queue_count):
+    def __init__(self, extension, lambd, mu, n, d, shape, len_schedule, w_track, queue_count):
         super().__init__()
+
+        self.extension = extension # enable extension (default: 0 -> disabled)
 
         # queues and running jobs
         self.running : list[int] = [None] * n  # if not None, the id of the running job
@@ -109,17 +111,6 @@ class Completion(Event):
 
         # set the completion time of the running job
         sim.completions[sim.running[self.queue_index]] = sim.t
-
-    
-        '''## if the queue is not empty
-        if len(sim.queues[self.queue_index]) > 0:
-            # get a job from the queue
-            sim.running[self.queue_index] = sim.queues[self.queue_index].popleft()
-            # schedule its completion
-            sim.schedule_completion(sim.running[self.queue_index], self.queue_index)
-        else:
-            sim.running[self.queue_index] = None'''
-        
         
         # if the queue is not empty
         if len(sim.queues[self.queue_index]) > 0:
@@ -127,16 +118,18 @@ class Completion(Event):
             sim.running[self.queue_index] = sim.queues[self.queue_index].popleft()
             # schedule its completion
             sim.schedule_completion(sim.running[self.queue_index], self.queue_index)
-        
-        ##----------------- EXTENSION -- Decrease load of the most loaded queue -----------------##
-        else:  # if the queue is empty, request a job from the most loaded queue
+        elif sim.extension:
+            ##----------------- FOR THE EXTENSION -- Decrease load of the most loaded queue -----------------##
+            # if the queue is empty, request a job from the most loaded queue
             max_queue = sim.supermarket(ifMax=True)
             if max_queue != self.queue_index and len(sim.queues[max_queue]) > 0:  # if is not the same queue and the most loaded queue is not empty
                 sim.running[self.queue_index] = sim.queues[max_queue].popleft()
                 sim.schedule_completion(sim.running[self.queue_index], self.queue_index)
             else:  # if the most loaded queue is also the same as the current one, remain idle
                 sim.running[self.queue_index] = None
-        ##---------------------------------------------------------------------------------------##
+            ##-----------------------------------------------------------------------------------------------##
+        else:
+            sim.running[self.queue_index] = None
         
 def main():
     parser = argparse.ArgumentParser()
@@ -149,6 +142,7 @@ def main():
     parser.add_argument('--csv', help="CSV file in which to store results")
     parser.add_argument("--seed", help="random seed")
     parser.add_argument("--verbose", action='store_true')
+    parser.add_argument("--extension", type=int, default=0) # enable extension (default: 0 -> disabled)
     # choose the rate of the schedule of the queue length event
     parser.add_argument("--len-schedule", type=int, default=200)
     # for weibull distribution
@@ -182,7 +176,7 @@ def main():
                 writer.writerow(['Lambda', 'Mu', 'Max time of simulation', 'Average time spent', 'Theoretical avg time spent', 'N of queues', 'D choice'])
  
     for lambd in lambdas:
-        sim = MMN(lambd, args.mu, args.n, args.d, args.shape, args.len_schedule, w_track, queue_count=[0] * pre_allocated)
+        sim = MMN(args.extension, lambd, args.mu, args.n, args.d, args.shape, args.len_schedule, w_track, queue_count=[0] * pre_allocated)
         sim.run(args.max_t)
 
         completions = sim.completions
@@ -196,8 +190,8 @@ def main():
         print(f"Theoretical expectation for random server choice: { Wt }") 
 
         # Calculate Wt based on all the queue lengths stored in the list
-        #Wt = sum(w_track) / len(w_track)
-        #print(f"Theoretical expectation for random server choice using avg in list: { Wt }")
+        Wt = sum(w_track) / len(w_track)
+        print(f"Theoretical expectation for random server choice using avg in list: { Wt }")
 
         q_lengths = list(range(len(sim.queue_count)))
         
