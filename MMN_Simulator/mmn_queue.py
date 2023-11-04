@@ -4,7 +4,7 @@ import argparse
 import csv
 import collections
 import logging
-from random import expovariate, seed, sample, random
+from random import sample, seed
 import matplotlib.pyplot as plt
 from workloads import weibull_generator
 
@@ -71,7 +71,7 @@ class MMN(Simulation):
 
     def schedule_arrival(self, job_id):
         # schedule the arrival following a weibull or exponential distribution (if shape = 1 -> exponential distribution)
-        self.schedule(self.arrival_gen(), Arrival(job_id, self.supermarket(ifMax=False)))
+        self.schedule(self.arrival_gen(), Arrival(job_id, self.supermarket()))
 
     def schedule_completion(self, job_id, queue_idx):
         # schedule the time of the completion event following a weibull or exponential distribution (if shape = 1 -> exponential distribution)
@@ -110,30 +110,33 @@ class Completion(Event):
         # set the completion time of the running job
         sim.completions[sim.running[self.queue_index]] = sim.t
 
-        '''
-        # if the queue is not empty
+    
+        '''## if the queue is not empty
         if len(sim.queues[self.queue_index]) > 0:
             # get a job from the queue
             sim.running[self.queue_index] = sim.queues[self.queue_index].popleft()
             # schedule its completion
             sim.schedule_completion(sim.running[self.queue_index], self.queue_index)
         else:
-            sim.running[self.queue_index] = None
-        '''
+            sim.running[self.queue_index] = None'''
+        
+        
         # if the queue is not empty
         if len(sim.queues[self.queue_index]) > 0:
             # get a job from the queue
             sim.running[self.queue_index] = sim.queues[self.queue_index].popleft()
             # schedule its completion
             sim.schedule_completion(sim.running[self.queue_index], self.queue_index)
+        
+        ##----------------- EXTENSION -- Decrease load of the most loaded queue -----------------##
         else:  # if the queue is empty, request a job from the most loaded queue
             max_queue = sim.supermarket(ifMax=True)
-            if max_queue != self.queue_index and len(sim.queues[max_queue]) > 0:  # if not the same queue
-                # if the most loaded queue is not empty
+            if max_queue != self.queue_index and len(sim.queues[max_queue]) > 0:  # if is not the same queue and the most loaded queue is not empty
                 sim.running[self.queue_index] = sim.queues[max_queue].popleft()
                 sim.schedule_completion(sim.running[self.queue_index], self.queue_index)
             else:  # if the most loaded queue is also the same as the current one, remain idle
                 sim.running[self.queue_index] = None
+        ##---------------------------------------------------------------------------------------##
         
 def main():
     parser = argparse.ArgumentParser()
@@ -149,11 +152,12 @@ def main():
     # choose the rate of the schedule of the queue length event
     parser.add_argument("--len-schedule", type=int, default=200)
     # for weibull distribution
-    parser.add_argument('--shape', type=float, default=1)  # se shape = 1 -> exponential distribution
+    parser.add_argument('--shape', type=float, default=1)  # if shape = 1 -> exponential distribution
     args = parser.parse_args()
 
     if args.seed:
-        random.seed(args.seed)  # set a seed to make experiments repeatable
+        seed(args.seed)
+        #random.seed(args.seed)  # set a seed to make experiments repeatable
     if args.verbose:
         logging.basicConfig(format='{levelname}:{message}', level=logging.INFO, style='{')  # output info on stdout
 
@@ -162,20 +166,20 @@ def main():
         lambdas = [args.lambd]
     else:
         lambdas = [0.5, 0.9, 0.95, 0.99]
-        #lambdas = [0.5, 0.55, 0.6, 0.65]
-        #lambdas = [0.9]
 
-    
     pre_allocated = 10 # other queue lenghts are eventually added on the fly
     w_track = []  # Initialize an empty list to store all lengths for Wt computation
 
-    plt.figure()  # Create a new figure for the plot
+    # Setting dimensions for the plot 
+    fig = plt.figure()  # Create a new figure for the plot
+    #fig.set_figwidth(8) 
+    #fig.set_figheight(5)
 
     # Creating csv file
     if args.csv is not None:
             with open(args.csv, 'a', newline='') as f:
                 writer = csv.writer(f)
-                writer.writerow(['Lambda', 'Mu', 'Max time of simulation', 'Practical time spent', 'Theoretical time spent', 'N of queues', 'D choice'])
+                writer.writerow(['Lambda', 'Mu', 'Max time of simulation', 'Average time spent', 'Theoretical avg time spent', 'N of queues', 'D choice'])
  
     for lambd in lambdas:
         sim = MMN(lambd, args.mu, args.n, args.d, args.shape, args.len_schedule, w_track, queue_count=[0] * pre_allocated)
@@ -192,11 +196,8 @@ def main():
         print(f"Theoretical expectation for random server choice: { Wt }") 
 
         # Calculate Wt based on all the queue lengths stored in the list
-        Wt = sum(w_track) / len(w_track)
-        print(f"Theoretical expectation for random server choice using total avg: { Wt }")
-
-        if(args.d == 1):
-            print(f"Theoretical expectation with formulae for d = 1: {1 / (args.mu - args.lambd)}")
+        #Wt = sum(w_track) / len(w_track)
+        #print(f"Theoretical expectation for random server choice using avg in list: { Wt }")
 
         q_lengths = list(range(len(sim.queue_count)))
         
