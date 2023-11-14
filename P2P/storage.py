@@ -7,6 +7,7 @@ import random
 from dataclasses import dataclass
 from random import expovariate
 from typing import Optional, List
+import matplotlib.pyplot as plt
 
 # the humanfriendly library (https://humanfriendly.readthedocs.io/en/latest/) lets us pass parameters in human-readable
 # format (e.g., "500 KiB" or "5 days"). You can safely remove this if you don't want to install it on your system, but
@@ -15,7 +16,6 @@ from typing import Optional, List
 from humanfriendly import format_timespan, parse_size, parse_timespan
 
 from discrete_event_sim import Simulation, Event
-
 
 def exp_rv(mean):
     """Return an exponential random variable with the given mean."""
@@ -26,21 +26,28 @@ class DataLost(Exception):
     """Not enough redundancy in the system, data is lost. We raise this exception to stop the simulation."""
     pass
 
-
 class Backup(Simulation):
     """Backup simulation.
     """
 
     # type annotations for `Node` are strings here to allow a forward declaration:
     # https://stackoverflow.com/questions/36193540/self-reference-or-forward-reference-of-type-annotations-in-python
-    def __init__(self, nodes: List['Node']):
+    def __init__(self, nodes: List['Node'], extension):
         super().__init__()  # call the __init__ method of parent class
         self.nodes = nodes
+        self.online_nodes_over_time = [] # added to keep track of the number of online nodes over time for plotting
+        self.disconnected_nodes_over_time = [] # added to keep track of the number of disconnected nodes over time for plotting
 
         # we add to the event queue the first event of each node going online and of failing
         for node in nodes:
             self.schedule(node.arrival_time, Online(node))
             self.schedule(node.arrival_time + exp_rv(node.average_lifetime), Fail(node))
+            # se ho specificato di volere l'estensione
+            if(extension):
+                self.schedule(exp_rv(node.corruption_rate), DataCorrupted(node))
+                # se voglio anche la recovery
+                if(extension != '1'):
+                    self.schedule(exp_rv(node.integrity_rate), DataRecovered(node))
 
     def schedule_transfer(self, uploader: 'Node', downloader: 'Node', block_id: int, restore: bool):
         """Helper function called by `Node.schedule_next_upload` and `Node.schedule_next_download`.
@@ -48,6 +55,25 @@ class Backup(Simulation):
         If `restore` is true, we are restoring a block owned by the downloader, otherwise, we are saving one owned by
         the uploader.
         """
+
+        # EXTENSION: Check for corrupted blocks and invalidate them if necessary
+        if restore:
+            # Check if the block is in corrupted_blocks as a tuple (downloader, block_id)
+            if (downloader, block_id) in uploader.corrupted_blocks:
+                # Remove the tuple from corrupted_block and invalidate the block
+                uploader.remote_blocks_held.pop(downloader, None)
+                downloader.backed_up_blocks[block_id] = None
+                # Now that I'm aware of the corruption, remove the tuple from corrupted_blocks
+                uploader.corrupted_blocks.remove((downloader, block_id))
+                return  # Do not schedule the event
+        else:
+            # Check if the block_id is directly in corrupted_blocks
+            if block_id in uploader.corrupted_blocks:
+                # Invalidate the block
+                uploader.local_blocks[block_id] = False  # Set False in local_blocks
+                # # Now that I'm aware of the corruption, remove the block_id from corrupted_blocks
+                uploader.corrupted_blocks.remove(block_id)
+                return  # Do not schedule the event
 
         block_size = downloader.block_size if restore else uploader.block_size
 
@@ -57,10 +83,11 @@ class Backup(Simulation):
         speed = min(uploader.upload_speed, downloader.download_speed)  # we take the slowest between the two
         delay = block_size / speed
         if restore:
-            event = BlockRestoreComplete(uploader, downloader, block_id)
+            event = BlockRestoreComplete(uploader, downloader, block_id) # we are restoring a block owned by the downloader
         else:
-            event = BlockBackupComplete(uploader, downloader, block_id)
+            event = BlockBackupComplete(uploader, downloader, block_id) # we are saving a block owned by the uploader
         self.schedule(delay, event)
+        # we set the current upload and download of the uploader and downloader to the event (syncing them)
         uploader.current_upload = downloader.current_download = event
 
         # self.log_info(f"scheduled {event.__class__.__name__} from {uploader} to {downloader}"
@@ -68,6 +95,13 @@ class Backup(Simulation):
 
     def log_info(self, msg):
         """Override method to get human-friendly logging for time."""
+
+        # added to keep track of the number of online nodes over time for plotting
+        online_nodes = sum(node.online for node in self.nodes)
+        self.online_nodes_over_time.append((self.t, online_nodes))
+        # added to keep track of the number of disconnected nodes over time for plotting
+        disconnected_nodes = sum(not node.online or node.failed for node in self.nodes)
+        self.disconnected_nodes_over_time.append((self.t, disconnected_nodes))
 
         logging.info(f'{format_timespan(self.t)}: {msg}')
 
@@ -102,6 +136,9 @@ class Node:
 
     arrival_time: float  # time at which the node will come online
 
+    corruption_rate: float # rate at which blocks are corrupted
+    integrity_rate: float # rate at which blocks are recovered
+
     def __post_init__(self):
         """Compute other data dependent on config values and set up initial state."""
 
@@ -134,6 +171,10 @@ class Node:
         self.current_upload: Optional[TransferComplete] = None
         self.current_download: Optional[TransferComplete] = None
 
+        # EXTENSION
+        self.corrupted_blocks = set()
+        self.corrupted_blocks_over_time: List[tuple[float, int]] = []
+
     def find_block_to_back_up(self):
         """Returns the block id of a block that needs backing up, or None if there are none."""
 
@@ -157,6 +198,7 @@ class Node:
             # if the block is not present locally and the peer is online and not downloading anything currently, then
             # schedule the restore from self to peer of block_id
             if peer.online and peer.current_download is None and not peer.local_blocks[block_id]:
+                # restore=True means we are restoring a block owned by the downloader (peer)
                 sim.schedule_transfer(self, peer, block_id, restore=True)
                 return  # we have found our upload, we stop
 
@@ -171,6 +213,7 @@ class Node:
             # downloading anything currently, schedule the backup of block_id from self to peer
             if (peer is not self and peer.online and peer not in remote_owners and peer.current_download is None
                     and peer.free_space >= peer.block_size):
+                # restore=False means we are saving a block owned by the uploader (self)
                 sim.schedule_transfer(self, peer, block_id, restore=False)
                 return
 
@@ -187,15 +230,18 @@ class Node:
         # first find if we have a missing block to restore
         for block_id, (held_locally, peer) in enumerate(zip(self.local_blocks, self.backed_up_blocks)):
             if not held_locally and peer is not None and peer.online and peer.current_upload is None:
+                # restore=True means we are restoring a block owned by the downloader (self)
                 sim.schedule_transfer(peer, self, block_id, restore=True)
                 return  # we are done in this case
 
         # try to back up a block for a remote node
         for peer in sim.nodes:
+            # if the peer is not self, is online, is not downloading anything currently, we don't already have his data
             if (peer is not self and peer.online and peer.current_upload is None and peer not in self.remote_blocks_held
                     and self.free_space >= self.block_size):
                 block_id = peer.find_block_to_back_up()
                 if block_id is not None:
+                    # restore=False means we are saving a block owned by the uploader (peer)
                     sim.schedule_transfer(peer, self, block_id, restore=False)
                     return
 
@@ -221,7 +267,69 @@ class NodeEvent(Event):
     def process(self, sim: Simulation):
         """Must be implemented by subclasses."""
         raise NotImplementedError
+    
+class DataCorrupted(NodeEvent):
+    """A block of the node (local of held for a remote peer) is corrupted."""
 
+    def process(self, sim: Backup):
+        node = self.node
+
+        # If the node is offline or failed, we don't corrupt anything
+        if node.failed:
+            return
+
+        # select a random block_id from local and held blocks to corrupt
+        block_id = random.choice([i for i in range(len(node.local_blocks) + len(node.remote_blocks_held))])
+
+        if block_id < len(node.local_blocks):
+            # if the block_id is in local_blocks, we corrupt it adding it to the set of corrupted blocks
+            node.corrupted_blocks.add(block_id)
+
+            sim.log_info(f"Local block {block_id} corrupted on {node}")
+        else:
+            # if the block_id is in remote_blocks_held, we corrupt it
+            idx = block_id - len(node.local_blocks)
+            # we add a tuple (Node, int) aka (remote owner of that block, that block id stored in remote_blocks_held) to the set of corrupted blocks
+            peer = list(node.remote_blocks_held.keys())[idx]
+            peer_block_id = node.remote_blocks_held[peer]
+            node.corrupted_blocks.add((peer, peer_block_id))
+            sim.log_info(f"Block {peer_block_id} corrupted on {node} (remote block held for {peer})")
+
+        node.corrupted_blocks_over_time.append((sim.t, len(node.corrupted_blocks)))
+
+        # Schedule the next corruption event
+        sim.schedule(exp_rv(node.corruption_rate), DataCorrupted(node))
+
+# class DataRecovered(NodeEvent) that checks all the blocks of the node and if they are corrupted, it removes them from the set of corrupted blocks and invalidates them as in the schedule_transfer function
+class DataRecovered(NodeEvent):
+
+    def process(self, sim: Backup):
+        node = self.node
+
+        # If the node is offline or failed, we don't recover anything
+        if node.failed:
+            return
+
+        # Check if there are corrupted blocks among the corrupted_blocks
+        # cycle through the list of corrupted blocks
+        for block in set(node.corrupted_blocks):
+            # if the block is a tuple (Node, int) aka (remote owner of that block, that block id stored in remote_blocks_held)
+            if isinstance(block, tuple):
+                # Remove the tuple from corrupted_block and invalidate the block
+                owner, block_id = block
+                node.remote_blocks_held.pop(owner, None)
+                owner.backed_up_blocks[block_id] = None
+                # Now that I'm aware of the corruption, remove the tuple from corrupted_blocks
+                node.corrupted_blocks.remove((owner, block_id))
+            else:
+                # Invalidate the block
+                block_id = block
+                node.local_blocks[block_id] = False  # Set False in local_blocks
+                # # Now that I'm aware of the corruption, remove the block_id from corrupted_blocks
+                node.corrupted_blocks.remove(block_id)
+
+        # Schedule the next corruption event
+        sim.schedule(exp_rv(node.integrity_rate), DataRecovered(node))
 
 class Online(NodeEvent):
     """A node goes online."""
@@ -322,9 +430,9 @@ class TransferComplete(Event):
         if self.canceled:
             return  # this transfer was canceled, so ignore this event
         uploader, downloader = self.uploader, self.downloader
-        assert uploader.online and downloader.online
+        assert uploader.online and downloader.online # we should be online
         self.update_block_state()
-        uploader.current_upload = downloader.current_download = None
+        uploader.current_upload = downloader.current_download = None # we are done
         uploader.schedule_next_upload(sim)
         downloader.schedule_next_download(sim)
         for node in [uploader, downloader]:
@@ -340,19 +448,19 @@ class TransferComplete(Event):
 class BlockBackupComplete(TransferComplete):
 
     def update_block_state(self):
-        owner, peer = self.uploader, self.downloader
-        peer.free_space -= owner.block_size
-        assert peer.free_space >= 0
-        owner.backed_up_blocks[self.block_id] = peer
-        peer.remote_blocks_held[owner] = self.block_id
+        owner, peer = self.uploader, self.downloader # uploader is the owner of the block, downloader is the peer
+        peer.free_space -= owner.block_size # we take the block size from the peer's free space
+        assert peer.free_space >= 0 # we should have enough space to store the block we just backed up on the peer
+        owner.backed_up_blocks[self.block_id] = peer # we update the owner's backed up blocks
+        peer.remote_blocks_held[owner] = self.block_id # we update the peer's remote blocks held
 
 
 class BlockRestoreComplete(TransferComplete):
     def update_block_state(self):
         owner = self.downloader
-        owner.local_blocks[self.block_id] = True
-        if sum(owner.local_blocks) == owner.k:
-            owner.local_blocks = [True] * owner.n
+        owner.local_blocks[self.block_id] = True 
+        if sum(owner.local_blocks) == owner.k: # if we have enough blocks to recover the data 
+            owner.local_blocks = [True] * owner.n # we recover the data!
 
 
 def main():
@@ -361,6 +469,7 @@ def main():
     parser.add_argument("--max-t", default="100 years")
     parser.add_argument("--seed", help="random seed")
     parser.add_argument("--verbose", action='store_true')
+    parser.add_argument("--extension", default=0)
     args = parser.parse_args()
 
     if args.seed:
@@ -375,7 +484,8 @@ def main():
         ('upload_speed', parse_size), ('download_speed', parse_size),
         ('average_uptime', parse_timespan), ('average_downtime', parse_timespan),
         ('average_lifetime', parse_timespan), ('average_recover_time', parse_timespan),
-        ('arrival_time', parse_timespan)
+        ('arrival_time', parse_timespan), ('corruption_rate', parse_timespan),
+        ('integrity_rate', parse_timespan)
     ]
 
     config = configparser.ConfigParser()
@@ -387,10 +497,45 @@ def main():
         cfg = [parse(class_config[name]) for name, parse in parsing_functions]
         # the `callable(p1, p2, *args)` idiom is equivalent to `callable(p1, p2, args[0], args[1], ...)
         nodes.extend(Node(f"{node_class}-{i}", *cfg) for i in range(class_config.getint('number')))
-    sim = Backup(nodes)
+    sim = Backup(nodes, args.extension)
+
     sim.run(parse_timespan(args.max_t))
+
+    # Plot the number of online nodes over time
+    time, online_nodes = zip(*sim.online_nodes_over_time)
+    plt.plot(time, online_nodes)
+    plt.xlabel('Time (seconds)')
+    plt.ylabel('Number of Online Nodes')
+    plt.title('Number of Online Nodes Over Time')
+    plt.show()
+
+    # Plot the number of disconnected nodes (offline or failed) over time
+    time, disconnected_nodes = zip(*sim.disconnected_nodes_over_time)
+    plt.plot(time, disconnected_nodes)
+    plt.xlabel('Time (seconds)')
+    plt.ylabel('Number of Disconnected Nodes')
+    plt.title('Number of Disconnected Nodes Over Time')
+    plt.show()
+
     sim.log_info(f"Simulation over")
 
+    # EXTENSION PLOTS -------------------------------------------------------------------
+    if(args.extension == 0):
+        return
+    
+    for node in sim.nodes:
+        if node.corrupted_blocks_over_time:
+            time, blocks_corrupted = zip(*node.corrupted_blocks_over_time)
+            plt.plot(time, blocks_corrupted, label=node.name)
+
+    plt.xlabel('Time (seconds)')
+    plt.ylabel('Number of Blocks Corrupted')
+    plt.title('Number of Blocks Corrupted Over Time')
+    plt.legend()  # Add a legend to distinguish nodes
+    plt.show()
+
+    # print the total number of corruptedblocks
+    print(f"Total number of blocks corrupted: {len([block for node in sim.nodes for block in node.corrupted_blocks])}")
 
 if __name__ == '__main__':
     main()
