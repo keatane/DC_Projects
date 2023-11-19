@@ -275,7 +275,7 @@ class DataCorrupted(NodeEvent):
         node = self.node
 
         # If the node is offline or failed, we don't corrupt anything
-        if node.failed:
+        if node.failed or node.n == 0: # if the node is failed or offline, we don't corrupt anything; also if the node is a server, since there are no "remote_blocks_held" or "local_blocks" for it
             return
 
         # select a random block_id from local and held blocks to corrupt
@@ -307,7 +307,7 @@ class DataRecovered(NodeEvent):
         node = self.node
 
         # If the node is offline or failed, we don't recover anything
-        if node.failed:
+        if node.failed or node.n == 0:
             return
 
         # Check if there are corrupted blocks among the corrupted_blocks
