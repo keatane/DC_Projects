@@ -71,7 +71,7 @@ class Backup(Simulation):
             if block_id in uploader.corrupted_blocks:
                 # Invalidate the block
                 uploader.local_blocks[block_id] = False  # Set False in local_blocks
-                # # Now that I'm aware of the corruption, remove the block_id from corrupted_blocks
+                # Now that I'm aware of the corruption, remove the block_id from corrupted_blocks
                 uploader.corrupted_blocks.remove(block_id)
                 return  # Do not schedule the event
 
@@ -290,8 +290,8 @@ class DataCorrupted(NodeEvent):
             # if the block_id is in remote_blocks_held, we corrupt it
             idx = block_id - len(node.local_blocks)
             # we add a tuple (Node, int) aka (remote owner of that block, that block id stored in remote_blocks_held) to the set of corrupted blocks
-            peer = list(node.remote_blocks_held.keys())[idx]
-            peer_block_id = node.remote_blocks_held[peer]
+            peer = list(node.remote_blocks_held.keys())[idx] # we get the idx-th peer from the list of remote_blocks_held peers
+            peer_block_id = node.remote_blocks_held[peer] # we get the block_id of the block held by the remote owner
             node.corrupted_blocks.add((peer, peer_block_id))
             sim.log_info(f"Block {peer_block_id} corrupted on {node} (remote block held for {peer})")
 
@@ -325,7 +325,7 @@ class DataRecovered(NodeEvent):
                 # Invalidate the block
                 block_id = block
                 node.local_blocks[block_id] = False  # Set False in local_blocks
-                # # Now that I'm aware of the corruption, remove the block_id from corrupted_blocks
+                # Now that I'm aware of the corruption, remove the block_id from corrupted_blocks
                 node.corrupted_blocks.remove(block_id)
 
         # Schedule the next corruption event
