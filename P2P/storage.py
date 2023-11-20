@@ -37,6 +37,8 @@ class Backup(Simulation):
         self.nodes = nodes
         self.online_nodes_over_time = [] # added to keep track of the number of online nodes over time for plotting
         self.disconnected_nodes_over_time = [] # added to keep track of the number of disconnected nodes over time for plotting
+        self.mean_local_storage_over_time = [] # added to keep track of the mean number of local storage over time for plotting
+        self.mean_backup_storage_over_time = [] # added to keep track of the mean number of backup storage over time for plotting
 
         # we add to the event queue the first event of each node going online and of failing
         for node in nodes:
@@ -45,7 +47,7 @@ class Backup(Simulation):
             # se ho specificato di volere l'estensione
             if(extension):
                 self.schedule(exp_rv(node.corruption_delay), DataCorrupted(node))
-                # se voglio anche la recovery
+                # if we want to enable recovery mode
                 if(extension != '1'):
                     self.schedule(exp_rv(node.integrity_delay), DataRecovered(node))
 
@@ -96,12 +98,35 @@ class Backup(Simulation):
     def log_info(self, msg):
         """Override method to get human-friendly logging for time."""
 
+        # We register here some statistics since we are logging only in certain important state of the simulation (that is when the state of nodes changes)
+
+        ## ONLINE NODES OVER TIME
         # added to keep track of the number of online nodes over time for plotting
         online_nodes = sum(node.online for node in self.nodes)
-        self.online_nodes_over_time.append((format_timespan(self.t), online_nodes))
+        # self.online_nodes_over_time.append((format_timespan(self.t), online_nodes))
+
+        years = 1
+        if str(format_timespan(self.t)).split(' ')[1] == 'years,':
+            years = int(str(format_timespan(self.t)).split(' ')[0])
+        self.online_nodes_over_time.append((years, online_nodes))
+
         # added to keep track of the number of disconnected nodes over time for plotting
-        disconnected_nodes = sum(not node.online or node.failed for node in self.nodes)
-        self.disconnected_nodes_over_time.append((format_timespan(self.t), disconnected_nodes))
+        # disconnected_nodes = sum(not node.online or node.failed for node in self.nodes)
+        # self.disconnected_nodes_over_time.append((format_timespan(self.t), disconnected_nodes))
+
+        ## MEAN NUMBER OF LOCAL STORAGE OVER TIME
+        mean_local_storage = sum(sum(node.local_blocks) for node in self.nodes) / len(self.nodes)
+        years = 1
+        if str(format_timespan(self.t)).split(' ')[1] == 'years,':
+            years = int(str(format_timespan(self.t)).split(' ')[0])
+        self.mean_local_storage_over_time.append((years, mean_local_storage))
+
+        ## MEAN NUMBER OF BACKUP STORAGE OVER TIME (that is how many blocks we have backed up on other nodes)
+        mean_backup_storage = sum(sum(peer is not None for peer in node.backed_up_blocks) for node in self.nodes) / len(self.nodes)
+        years = 1
+        if str(format_timespan(self.t)).split(' ')[1] == 'years,':
+            years = int(str(format_timespan(self.t)).split(' ')[0])
+        self.mean_backup_storage_over_time.append((years, mean_backup_storage))
 
         logging.info(f'{format_timespan(self.t)}: {msg}')
 
@@ -307,7 +332,7 @@ class DataCorrupted(NodeEvent):
             sim.log_info(f"Block {peer_block_id} corrupted on {node} (remote block held for {peer})")
 
         years = 1
-        if str(format_timespan(sim.t)).split(' ')[1] == 'years,' or str(format_timespan(sim.t)).split(' ')[1] == 'year,':
+        if str(format_timespan(sim.t)).split(' ')[1] == 'years,':
             years = int(str(format_timespan(sim.t)).split(' ')[0])
         node.corrupted_blocks_over_time.append((years, len(node.corrupted_blocks)))
 
@@ -364,7 +389,7 @@ class Recover(Online):
 
     def process(self, sim: Backup):
         node = self.node
-        # sim.log_info(f"{node} recovers")
+        sim.log_info(f"{node} recovers")
         node.failed = False
         super().process(sim)
         sim.schedule(exp_rv(node.average_lifetime), Fail(node))
@@ -524,52 +549,110 @@ def main():
     sim = Backup(nodes, args.extension)
 
     sim.run(parse_timespan(args.max_t))
-
-    # Plot the number of online nodes over time
-    '''time, online_nodes = zip(*sim.online_nodes_over_time)
-    plt.plot(time, online_nodes)
-    plt.xlabel('Time (seconds)')
-    plt.ylabel('Number of Online Nodes')
-    plt.title('Number of Online Nodes Over Time')
-    plt.show()'''
-
-    # Plot the number of disconnected nodes (offline or failed) over time
-    '''time, disconnected_nodes = zip(*sim.disconnected_nodes_over_time)
-    plt.plot(time, disconnected_nodes)
-    plt.xlabel('Time (seconds)')
-    plt.ylabel('Number of Disconnected Nodes')
-    plt.title('Number of Disconnected Nodes Over Time')
-    plt.show()'''
-
     sim.log_info(f"Simulation over")
+
+    # === PLOTS === #
+    # if sim.online_nodes_over_time:
+    #     d = {} # dictionary to keep track of the number of online nodes over years
+    #     for years, online_nodes in sim.online_nodes_over_time:
+    #         if years in d:
+    #             d[years] += online_nodes
+    #         else:
+    #             d[years] = online_nodes
+        
+    #     plt.plot(d.keys(), d.values())
+
+    if sim.online_nodes_over_time:
+        cumulative_online_nodes = []  # list to keep track of the cumulative number of online nodes over years
+
+        for years, online_nodes in sim.online_nodes_over_time:
+            while len(cumulative_online_nodes) < years:
+                cumulative_online_nodes.append([])
+
+            cumulative_online_nodes[years - 1].append(online_nodes)
+
+        mean_online_nodes = [sum(nodes) / len(nodes) if nodes else 0 for nodes in cumulative_online_nodes]
+
+        plt.plot(range(1, len(mean_online_nodes) + 1), mean_online_nodes, drawstyle='steps-post')
+
+    plt.xlabel('Time (years)')
+    plt.ylabel('Mean Number of Online Nodes')
+    plt.title('Mean Number of Online Nodes over time')
+    plt.xlim([1, 50])
+    plt.show()
+
+    # Plotting mean local storage over time (note that there are many zeros in case of ClientServer configuration)
+    if sim.mean_local_storage_over_time:
+        cumulative_mean_local_storage = []  # list to keep track of the cumulative mean local storage over years
+
+        for years, mean_local in sim.mean_local_storage_over_time:
+            while len(cumulative_mean_local_storage) < years:
+                cumulative_mean_local_storage.append([])
+
+            cumulative_mean_local_storage[years - 1].append(mean_local)
+
+        mean_local_storage = [sum(means) / len(means) if means else 0 for means in cumulative_mean_local_storage]
+
+        plt.plot(range(1, len(mean_local_storage) + 1), mean_local_storage, drawstyle='steps-post')
+
+    plt.xlabel('Time (years)')
+    plt.ylabel('Mean of local blocks')
+    plt.title('Mean of local blocks over time')
+    plt.xlim([1, 50])
+    plt.show()
+
+    # Plotting mean backup storage over time (note that there are many zeros in case of ClientServer configuration)
+    if sim.mean_backup_storage_over_time:
+        cumulative_mean_backup_storage = []  # list to keep track of the cumulative mean backup storage over years
+
+        for years, mean_backup in sim.mean_backup_storage_over_time:
+            while len(cumulative_mean_backup_storage) < years:
+                cumulative_mean_backup_storage.append([])
+
+            cumulative_mean_backup_storage[years - 1].append(mean_backup)
+
+        mean_backup_storage = [sum(means) / len(means) if means else 0 for means in cumulative_mean_backup_storage]
+
+        plt.plot(range(1, len(mean_backup_storage) + 1), mean_backup_storage, drawstyle='steps-post')
+
+    plt.xlabel('Time (years)')
+    plt.ylabel('Mean of backed up blocks')
+    plt.title('Mean of backed up blocks over time')
+    plt.xlim([1, 50])
+    plt.show()
+
+
 
     # EXTENSION PLOTS -------------------------------------------------------------------
     if(args.extension == 0):
         return
 
-    for node in sim.nodes:
+    # List to keep track of cumulative corrupted blocks over time for each node
+    cumulative_corrupted_blocks = [[] for _ in range(len(sim.nodes))]
+
+    for i, node in enumerate(sim.nodes):
         if node.corrupted_blocks_over_time:
-            d = {} # dictionary to keep track of the number of corrupted blocks over years
             for years, blocks_corrupted in node.corrupted_blocks_over_time:
-                if years in d:
-                    d[years] += blocks_corrupted
-                else:
-                    d[years] = blocks_corrupted
-            
-            if(node.n == 0):
-                plt.plot(d.keys(), d.values(), label=node.name, linestyle='dotted') # if a server, plot a dotted line
-            else:
-                plt.plot(d.keys(), d.values(), label=node.name)
+                while len(cumulative_corrupted_blocks[i]) < years:
+                    cumulative_corrupted_blocks[i].append([])
+
+                cumulative_corrupted_blocks[i][years - 1].append(blocks_corrupted)
+
+    # Plotting cumulative corrupted blocks for each node
+    for i, node in enumerate(sim.nodes):
+        mean_corrupted_blocks = [sum(blocks) / len(blocks) if blocks else 0 for blocks in cumulative_corrupted_blocks[i]]
+
+        if node.n == 0:
+            plt.plot(range(1, len(mean_corrupted_blocks) + 1), mean_corrupted_blocks, label=node.name, linestyle='dotted', drawstyle='steps-post')
+        else:
+            plt.plot(range(1, len(mean_corrupted_blocks) + 1), mean_corrupted_blocks, label=node.name, drawstyle='steps-post')
 
     plt.xlabel('Time (years)')
-    plt.ylabel('Number of Blocks Corrupted')
-    plt.title('Number of Blocks Corrupted Over Time')
-    #plt.xlim([1,10])
+    plt.ylabel('Mean Number of Blocks Corrupted')
+    plt.title('Mean Number of Blocks Corrupted Over Time')
     plt.legend()  # Add a legend to distinguish nodes
+    plt.xlim([1, 50])
     plt.show()
-
-    # print the total number of corruptedblocks
-    # print(f"Total number of blocks corrupted: {len([block for node in sim.nodes for block in node.corrupted_blocks])}")
 
 if __name__ == '__main__':
     main()
