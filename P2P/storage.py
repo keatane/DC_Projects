@@ -35,7 +35,6 @@ class Backup(Simulation):
         super().__init__()  # call the __init__ method of parent class
         self.nodes = nodes
         self.online_nodes_over_time = [] # added to keep track of the number of online nodes over time for plotting
-        self.disconnected_nodes_over_time = [] # added to keep track of the number of disconnected nodes over time for plotting
         self.mean_local_storage_over_time = [] # added to keep track of the mean number of local storage over time for plotting
         self.mean_backup_storage_over_time = [] # added to keep track of the mean number of backup storage over time for plotting
 
@@ -58,7 +57,7 @@ class Backup(Simulation):
         the uploader.
         """
 
-        # EXTENSION: Check for corrupted blocks and invalidate them if necessary
+        # === EXTENSION: Check for corrupted blocks and invalidate them if necessary === #
         if restore:
             # Check if the block is in corrupted_blocks as a tuple (downloader, block_id)
             if (downloader, block_id) in uploader.corrupted_blocks:
@@ -219,7 +218,7 @@ class Node:
 
         assert self.online
 
-        #sim.log_info(f"schedule_next_download on {self}")
+        # sim.log_info(f"schedule_next_download on {self}")
 
         if self.current_download is not None:
             return
@@ -353,10 +352,9 @@ class Online(NodeEvent):
         # schedule the next offline event
         sim.schedule(exp_rv(node.average_uptime), Offline(node))
 
-        ## Get Statistics
+        ## Get Statistics --- ONLINE NODES OVER TIME
         # added to keep track of the number of online nodes over time for plotting
         online_nodes = sum(node.online for node in sim.nodes)
-        #sim.online_nodes_over_time.append((format_timespan(self.t), online_nodes))
 
         years = 1
         if str(format_timespan(sim.t)).split(' ')[1] == 'years,':
@@ -418,11 +416,6 @@ class Fail(Disconnection):
 
     def process(self, sim: Backup):
         sim.log_info(f"{self.node} fails")
-        # if(self.node.n != 0):
-        #     print("WARNING")
-        #     print(len(self.node.corrupted_blocks))
-        #     for n in sim.nodes:
-        #         print(f"{len(n.remote_blocks_held)} remote blocks held from {n}")
         self.disconnect()
         node = self.node
         node.failed = True
@@ -485,8 +478,7 @@ class BlockBackupComplete(TransferComplete):
         owner.backed_up_blocks[self.block_id] = peer # we update the owner's backed up blocks
         peer.remote_blocks_held[owner] = self.block_id # we update the peer's remote blocks held
 
-        ## Get Statistics
-        ## MEAN NUMBER OF BACKUP STORAGE OVER TIME (that is how many blocks we have backed up on other nodes)
+        ## Get Statistics --- MEAN NUMBER OF BACKUP STORAGE OVER TIME (that is how many blocks we have backed up on other nodes)
 
         # Checking if in client-server config
         is_server = any(node.n == 0 for node in sim.nodes)
@@ -510,8 +502,7 @@ class BlockRestoreComplete(TransferComplete):
         if sum(owner.local_blocks) == owner.k: # if we have enough blocks to recover the data 
             owner.local_blocks = [True] * owner.n # we recover the data!
 
-        ## Get Statistics
-        ## MEAN NUMBER OF LOCAL STORAGE OVER TIME
+        ## Get Statistics --- MEAN NUMBER OF LOCAL STORAGE OVER TIME
 
         # Checking if in client-server config
         is_server = any(node.n == 0 for node in sim.nodes)
@@ -552,7 +543,7 @@ def main():
         ('arrival_time', parse_timespan), ('corruption_delay', parse_timespan),
         ('integrity_delay', parse_timespan)
     ]
-    print(args.config)
+    
     config = configparser.ConfigParser()
     config.read(args.config)
     nodes = []  # we build the list of nodes to pass to the Backup class
@@ -568,7 +559,7 @@ def main():
     sim.log_info(f"Simulation over")
 
     # === PLOTS === #
-
+    # auxiliary function to plot multiple data over time
     def plot_mean_over_time(data_over_time, ylabel, title):
         if data_over_time:
             # cumulative_data = [[] for _ in range(len(data_over_time[0][1]))]
@@ -600,7 +591,7 @@ def main():
     plot_mean_over_time(sim.mean_backup_storage_over_time, 'Mean of backed up blocks', 'Mean of backed up blocks over time')
 
 
-    # EXTENSION PLOTS -------------------------------------------------------------------
+    # === EXTENSION PLOTS === #
     if(args.extension == 0):
         return
 
