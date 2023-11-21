@@ -21,7 +21,6 @@ def exp_rv(mean):
     """Return an exponential random variable with the given mean."""
     return expovariate(1 / mean)
 
-
 class DataLost(Exception):
     """Not enough redundancy in the system, data is lost. We raise this exception to stop the simulation."""
     pass
@@ -44,12 +43,13 @@ class Backup(Simulation):
         for node in nodes:
             self.schedule(node.arrival_time, Online(node))
             self.schedule(node.arrival_time + exp_rv(node.average_lifetime), Fail(node))
-            # se ho specificato di volere l'estensione
+            # if I want to enable extension
             if(extension):
                 self.schedule(exp_rv(node.corruption_delay), DataCorrupted(node))
                 # if we want to enable recovery mode
                 if(extension != '1'):
                     self.schedule(exp_rv(node.integrity_delay), DataRecovered(node))
+                #self.schedule(parse_timespan(GetStatistics.schedulation), GetStatistics()) # called after num of seconds in a year
 
     def schedule_transfer(self, uploader: 'Node', downloader: 'Node', block_id: int, restore: bool):
         """Helper function called by `Node.schedule_next_upload` and `Node.schedule_next_download`.
@@ -97,36 +97,6 @@ class Backup(Simulation):
 
     def log_info(self, msg):
         """Override method to get human-friendly logging for time."""
-
-        # We register here some statistics since we are logging only in certain important state of the simulation (that is when the state of nodes changes)
-
-        ## ONLINE NODES OVER TIME
-        # added to keep track of the number of online nodes over time for plotting
-        online_nodes = sum(node.online for node in self.nodes)
-        # self.online_nodes_over_time.append((format_timespan(self.t), online_nodes))
-
-        years = 1
-        if str(format_timespan(self.t)).split(' ')[1] == 'years,':
-            years = int(str(format_timespan(self.t)).split(' ')[0])
-        self.online_nodes_over_time.append((years, online_nodes))
-
-        # added to keep track of the number of disconnected nodes over time for plotting
-        # disconnected_nodes = sum(not node.online or node.failed for node in self.nodes)
-        # self.disconnected_nodes_over_time.append((format_timespan(self.t), disconnected_nodes))
-
-        ## MEAN NUMBER OF LOCAL STORAGE OVER TIME
-        mean_local_storage = sum(sum(node.local_blocks) for node in self.nodes) / len(self.nodes)
-        years = 1
-        if str(format_timespan(self.t)).split(' ')[1] == 'years,':
-            years = int(str(format_timespan(self.t)).split(' ')[0])
-        self.mean_local_storage_over_time.append((years, mean_local_storage))
-
-        ## MEAN NUMBER OF BACKUP STORAGE OVER TIME (that is how many blocks we have backed up on other nodes)
-        mean_backup_storage = sum(sum(peer is not None for peer in node.backed_up_blocks) for node in self.nodes) / len(self.nodes)
-        years = 1
-        if str(format_timespan(self.t)).split(' ')[1] == 'years,':
-            years = int(str(format_timespan(self.t)).split(' ')[0])
-        self.mean_backup_storage_over_time.append((years, mean_backup_storage))
 
         logging.info(f'{format_timespan(self.t)}: {msg}')
 
@@ -383,6 +353,16 @@ class Online(NodeEvent):
         # schedule the next offline event
         sim.schedule(exp_rv(node.average_uptime), Offline(node))
 
+        ## Get Statistics
+        # added to keep track of the number of online nodes over time for plotting
+        online_nodes = sum(node.online for node in sim.nodes)
+        #sim.online_nodes_over_time.append((format_timespan(self.t), online_nodes))
+
+        years = 1
+        if str(format_timespan(sim.t)).split(' ')[1] == 'years,':
+            years = int(str(format_timespan(sim.t)).split(' ')[0])
+        sim.online_nodes_over_time.append((years, online_nodes))
+
 
 class Recover(Online):
     """A node goes online after recovering from a failure."""
@@ -393,6 +373,8 @@ class Recover(Online):
         node.failed = False
         super().process(sim)
         sim.schedule(exp_rv(node.average_lifetime), Fail(node))
+
+        
 
 
 class Disconnection(NodeEvent):
@@ -480,7 +462,7 @@ class TransferComplete(Event):
             return  # this transfer was canceled, so ignore this event
         uploader, downloader = self.uploader, self.downloader
         assert uploader.online and downloader.online # we should be online
-        self.update_block_state()
+        self.update_block_state(sim) # added sim as parameter
         uploader.current_upload = downloader.current_download = None # we are done
         uploader.schedule_next_upload(sim)
         downloader.schedule_next_download(sim)
@@ -496,20 +478,54 @@ class TransferComplete(Event):
 
 class BlockBackupComplete(TransferComplete):
 
-    def update_block_state(self):
+    def update_block_state(self, sim:Backup):
         owner, peer = self.uploader, self.downloader # uploader is the owner of the block, downloader is the peer
         peer.free_space -= owner.block_size # we take the block size from the peer's free space
         assert peer.free_space >= 0 # we should have enough space to store the block we just backed up on the peer
         owner.backed_up_blocks[self.block_id] = peer # we update the owner's backed up blocks
         peer.remote_blocks_held[owner] = self.block_id # we update the peer's remote blocks held
 
+        ## Get Statistics
+        ## MEAN NUMBER OF BACKUP STORAGE OVER TIME (that is how many blocks we have backed up on other nodes)
+
+        # Checking if in client-server config
+        is_server = any(node.n == 0 for node in sim.nodes)
+        client_node = next((node for node in sim.nodes if node.n != 0), None)
+
+        if is_server and client_node: # means that there is client-server loaded, we compute only local blocks of clients (since there is none in server)
+            mean_backup_storage = sum(peer is not None for peer in client_node.backed_up_blocks)
+        else:
+            mean_backup_storage = sum(sum(peer is not None for peer in node.backed_up_blocks) for node in sim.nodes) / len(sim.nodes)
+
+        years = 1
+        if str(format_timespan(sim.t)).split(' ')[1] == 'years,':
+            years = int(str(format_timespan(sim.t)).split(' ')[0])
+        sim.mean_backup_storage_over_time.append((years, mean_backup_storage))
+
 
 class BlockRestoreComplete(TransferComplete):
-    def update_block_state(self):
+    def update_block_state(self, sim:Backup):
         owner = self.downloader
         owner.local_blocks[self.block_id] = True 
         if sum(owner.local_blocks) == owner.k: # if we have enough blocks to recover the data 
             owner.local_blocks = [True] * owner.n # we recover the data!
+
+        ## Get Statistics
+        ## MEAN NUMBER OF LOCAL STORAGE OVER TIME
+
+        # Checking if in client-server config
+        is_server = any(node.n == 0 for node in sim.nodes)
+        client_node = next((node for node in sim.nodes if node.n != 0), None)
+
+        if is_server and client_node: # means that there is client-server loaded, we compute only local blocks of clients (since there is none in server)
+            mean_local_storage = sum(client_node.local_blocks)
+        else:
+            mean_local_storage = sum(sum(node.local_blocks) for node in sim.nodes) / len(sim.nodes)
+
+        years = 1
+        if str(format_timespan(sim.t)).split(' ')[1] == 'years,':
+            years = int(str(format_timespan(sim.t)).split(' ')[0])
+        sim.mean_local_storage_over_time.append((years, mean_local_storage))
 
 
 def main():
@@ -536,7 +552,7 @@ def main():
         ('arrival_time', parse_timespan), ('corruption_delay', parse_timespan),
         ('integrity_delay', parse_timespan)
     ]
-
+    print(args.config)
     config = configparser.ConfigParser()
     config.read(args.config)
     nodes = []  # we build the list of nodes to pass to the Backup class
@@ -552,82 +568,43 @@ def main():
     sim.log_info(f"Simulation over")
 
     # === PLOTS === #
-    # if sim.online_nodes_over_time:
-    #     d = {} # dictionary to keep track of the number of online nodes over years
-    #     for years, online_nodes in sim.online_nodes_over_time:
-    #         if years in d:
-    #             d[years] += online_nodes
-    #         else:
-    #             d[years] = online_nodes
-        
-    #     plt.plot(d.keys(), d.values())
 
-    if sim.online_nodes_over_time:
-        cumulative_online_nodes = []  # list to keep track of the cumulative number of online nodes over years
+    def plot_mean_over_time(data_over_time, ylabel, title):
+        if data_over_time:
+            # cumulative_data = [[] for _ in range(len(data_over_time[0][1]))]
+            cumulative_data = []
 
-        for years, online_nodes in sim.online_nodes_over_time:
-            while len(cumulative_online_nodes) < years:
-                cumulative_online_nodes.append([])
+            for years, data in data_over_time:
+                while len(cumulative_data) < years:
+                    cumulative_data.append([])
 
-            cumulative_online_nodes[years - 1].append(online_nodes)
+                cumulative_data[years - 1].append(data)
 
-        mean_online_nodes = [sum(nodes) / len(nodes) if nodes else 0 for nodes in cumulative_online_nodes]
+            mean_data = [sum(data) / len(data) if data else 0 for data in cumulative_data]
 
-        plt.plot(range(1, len(mean_online_nodes) + 1), mean_online_nodes, drawstyle='steps-post')
+            plt.plot(range(1, len(mean_data) + 1), mean_data, drawstyle='steps-post')
 
-    plt.xlabel('Time (years)')
-    plt.ylabel('Mean Number of Online Nodes')
-    plt.title('Mean Number of Online Nodes over time')
-    plt.xlim([1, 50])
-    plt.show()
+            plt.xlabel('Time (years)')
+            plt.ylabel(ylabel)
+            plt.title(title)
+            plt.xlim(left=1)
+            plt.show()
 
-    # Plotting mean local storage over time (note that there are many zeros in case of ClientServer configuration)
-    if sim.mean_local_storage_over_time:
-        cumulative_mean_local_storage = []  # list to keep track of the cumulative mean local storage over years
+    # Plotting mean online nodes over time
+    plot_mean_over_time(sim.online_nodes_over_time, 'Mean Number of Online Nodes', 'Mean Number of Online Nodes over time')
 
-        for years, mean_local in sim.mean_local_storage_over_time:
-            while len(cumulative_mean_local_storage) < years:
-                cumulative_mean_local_storage.append([])
+    # Plotting mean local storage over time
+    plot_mean_over_time(sim.mean_local_storage_over_time, 'Mean of local blocks', 'Mean of local blocks over time')
 
-            cumulative_mean_local_storage[years - 1].append(mean_local)
-
-        mean_local_storage = [sum(means) / len(means) if means else 0 for means in cumulative_mean_local_storage]
-
-        plt.plot(range(1, len(mean_local_storage) + 1), mean_local_storage, drawstyle='steps-post')
-
-    plt.xlabel('Time (years)')
-    plt.ylabel('Mean of local blocks')
-    plt.title('Mean of local blocks over time')
-    plt.xlim([1, 50])
-    plt.show()
-
-    # Plotting mean backup storage over time (note that there are many zeros in case of ClientServer configuration)
-    if sim.mean_backup_storage_over_time:
-        cumulative_mean_backup_storage = []  # list to keep track of the cumulative mean backup storage over years
-
-        for years, mean_backup in sim.mean_backup_storage_over_time:
-            while len(cumulative_mean_backup_storage) < years:
-                cumulative_mean_backup_storage.append([])
-
-            cumulative_mean_backup_storage[years - 1].append(mean_backup)
-
-        mean_backup_storage = [sum(means) / len(means) if means else 0 for means in cumulative_mean_backup_storage]
-
-        plt.plot(range(1, len(mean_backup_storage) + 1), mean_backup_storage, drawstyle='steps-post')
-
-    plt.xlabel('Time (years)')
-    plt.ylabel('Mean of backed up blocks')
-    plt.title('Mean of backed up blocks over time')
-    plt.xlim([1, 50])
-    plt.show()
-
+    # Plotting mean backup storage over time
+    plot_mean_over_time(sim.mean_backup_storage_over_time, 'Mean of backed up blocks', 'Mean of backed up blocks over time')
 
 
     # EXTENSION PLOTS -------------------------------------------------------------------
     if(args.extension == 0):
         return
 
-    # List to keep track of cumulative corrupted blocks over time for each node
+    # List to keep track of cumulative corrupted blocks over time for each node (list of lists)
     cumulative_corrupted_blocks = [[] for _ in range(len(sim.nodes))]
 
     for i, node in enumerate(sim.nodes):
@@ -651,7 +628,7 @@ def main():
     plt.ylabel('Mean Number of Blocks Corrupted')
     plt.title('Mean Number of Blocks Corrupted Over Time')
     plt.legend()  # Add a legend to distinguish nodes
-    plt.xlim([1, 50])
+    plt.xlim([1,10])
     plt.show()
 
 if __name__ == '__main__':
