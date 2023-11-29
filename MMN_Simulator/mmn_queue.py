@@ -10,7 +10,7 @@ from workloads import weibull_generator
 
 from discrete_event_sim import Simulation, Event
 
-# Event to get lengths
+# Event to get lengths, to obtain statistics used in plots
 class GetLengths(Event):
     def __init__(self, len_schedule):
         self.len_schedule = len_schedule
@@ -29,8 +29,10 @@ class GetLengths(Event):
 
 class MMN(Simulation):
 
-    def __init__(self, lambd, mu, n, d, shape, len_schedule, w_track, queue_count):
+    def __init__(self, extension, lambd, mu, n, d, shape, len_schedule, w_track, queue_count):
         super().__init__()
+
+        self.extension = extension # enable extension (default: 0 -> disabled)
 
         # queues and running jobs
         self.running : list[int] = [None] * n  # if not None, the id of the running job
@@ -66,7 +68,7 @@ class MMN(Simulation):
         indexes = sample(range(len(self.queues)), self.d)
         # choose the queue with the minimum length
         if ifMax:
-            return max(indexes, key=lambda i: self.queue_len(i))
+            return max(indexes, key=lambda i: self.queue_len(i)) # added for extension
         return min(indexes, key=lambda i: self.queue_len(i)) # take min based on len of queues
 
     def schedule_arrival(self, job_id):
@@ -116,16 +118,18 @@ class Completion(Event):
             sim.running[self.queue_index] = sim.queues[self.queue_index].popleft()
             # schedule its completion
             sim.schedule_completion(sim.running[self.queue_index], self.queue_index)
-        
-        ##----------------- EXTENSION -- Decrease load of the most loaded queue -----------------##
-        else:  # if the queue is empty, request a job from the most loaded queue
+        elif sim.extension:
+            ##----------------- EXTENSION -- Decrease load of the most loaded queue -----------------##
+            # if the queue is empty, request a job from the most loaded queue
             max_queue = sim.supermarket(ifMax=True)
             if max_queue != self.queue_index and len(sim.queues[max_queue]) > 0:  # if is not the same queue and the most loaded queue is not empty
                 sim.running[self.queue_index] = sim.queues[max_queue].popleft()
                 sim.schedule_completion(sim.running[self.queue_index], self.queue_index)
             else:  # if the most loaded queue is also the same as the current one, remain idle
                 sim.running[self.queue_index] = None
-        ##---------------------------------------------------------------------------------------##
+            ##-----------------------------------------------------------------------------------------------##
+        else:
+            sim.running[self.queue_index] = None
         
 def main():
     parser = argparse.ArgumentParser()
@@ -138,6 +142,7 @@ def main():
     parser.add_argument('--csv', help="CSV file in which to store results")
     parser.add_argument("--seed", help="random seed")
     parser.add_argument("--verbose", action='store_true')
+    parser.add_argument("--extension", type=int, default=0) # enable extension (default: 0 -> disabled)
     # choose the rate of the schedule of the queue length event
     parser.add_argument("--len-schedule", type=int, default=200)
     # for weibull distribution
@@ -165,7 +170,7 @@ def main():
                 writer.writerow(['Lambda', 'Mu', 'Max time of simulation', 'Average time spent', 'Theoretical avg time spent', 'N of queues', 'D choice'])
  
     for lambd in lambdas:
-        sim = MMN(lambd, args.mu, args.n, args.d, args.shape, args.len_schedule, w_track, queue_count=[0] * pre_allocated)
+        sim = MMN(args.extension, lambd, args.mu, args.n, args.d, args.shape, args.len_schedule, w_track, queue_count=[0] * pre_allocated)
         sim.run(args.max_t)
 
         completions = sim.completions
@@ -174,7 +179,7 @@ def main():
         W = (sum(completions.values()) - sum(sim.arrivals[job_id] for job_id in completions)) / len(completions)
         print(f"Average time spent in the system for lambda={lambd}: {W}") 
 
-        # theoritical W (W = L / lambda for Little's law), comment it if you want a clearer csv
+        # theoritical W (W = L / lambda for Little's law)
         Wt = (sum(sim.q_lengths) / len(sim.q_lengths)) / lambd
         print(f"Theoretical expectation for random server choice: { Wt }") 
 
