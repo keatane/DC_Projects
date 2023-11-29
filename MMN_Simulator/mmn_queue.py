@@ -10,7 +10,7 @@ from workloads import weibull_generator
 
 from discrete_event_sim import Simulation, Event
 
-# Event to get lengths
+# Event to get lengths, to obtain statistics used in plots
 class GetLengths(Event):
     def __init__(self, len_schedule):
         self.len_schedule = len_schedule
@@ -68,7 +68,7 @@ class MMN(Simulation):
         indexes = sample(range(len(self.queues)), self.d)
         # choose the queue with the minimum length
         if ifMax:
-            return max(indexes, key=lambda i: self.queue_len(i))
+            return max(indexes, key=lambda i: self.queue_len(i)) # added for extension
         return min(indexes, key=lambda i: self.queue_len(i)) # take min based on len of queues
 
     def schedule_arrival(self, job_id):
@@ -119,7 +119,7 @@ class Completion(Event):
             # schedule its completion
             sim.schedule_completion(sim.running[self.queue_index], self.queue_index)
         elif sim.extension:
-            ##----------------- FOR THE EXTENSION -- Decrease load of the most loaded queue -----------------##
+            ##----------------- EXTENSION -- Decrease load of the most loaded queue -----------------##
             # if the queue is empty, request a job from the most loaded queue
             max_queue = sim.supermarket(ifMax=True)
             if max_queue != self.queue_index and len(sim.queues[max_queue]) > 0:  # if is not the same queue and the most loaded queue is not empty
@@ -150,8 +150,7 @@ def main():
     args = parser.parse_args()
 
     if args.seed:
-        seed(args.seed)
-        #random.seed(args.seed)  # set a seed to make experiments repeatable
+        seed(args.seed) # set a seed to make experiments repeatable
     if args.verbose:
         logging.basicConfig(format='{levelname}:{message}', level=logging.INFO, style='{')  # output info on stdout
 
@@ -163,11 +162,6 @@ def main():
 
     pre_allocated = 10 # other queue lenghts are eventually added on the fly
     w_track = []  # Initialize an empty list to store all lengths for Wt computation
-
-    # Setting dimensions for the plot 
-    fig = plt.figure()  # Create a new figure for the plot
-    #fig.set_figwidth(8) 
-    #fig.set_figheight(5)
 
     # Creating csv file
     if args.csv is not None:
