@@ -34,6 +34,9 @@ class Backup(Simulation):
     def __init__(self, nodes: List['Node'], extension):
         super().__init__()  # call the __init__ method of parent class
         self.nodes = nodes
+        self.online_nodes_over_time = [] # added to keep track of the number of online nodes over time for plotting
+        self.mean_local_storage_over_time = [] # added to keep track of the mean number of local storage over time for plotting
+        self.mean_backup_storage_over_time = [] # added to keep track of the mean number of backup storage over time for plotting
 
         self.online_nodes_over_time = [] # added to keep track of the number of online nodes over time for plotting
         self.mean_local_storage_over_time = [] # added to keep track of the mean number of local storage over time for plotting
@@ -43,6 +46,13 @@ class Backup(Simulation):
         for node in nodes:
             self.schedule(node.arrival_time, Online(node))
             self.schedule(node.arrival_time + exp_rv(node.average_lifetime), Fail(node))
+            # if I want to enable extension
+            if(extension):
+                self.schedule(exp_rv(node.corruption_delay), DataCorrupted(node))
+                # if we want to enable recovery mode
+                if(extension != '1'):
+                    self.schedule(exp_rv(node.integrity_delay), DataRecovered(node))
+                #self.schedule(parse_timespan(GetStatistics.schedulation), GetStatistics()) # called after num of seconds in a year
 
             # to enable extension (1)
             if(extension):
@@ -76,7 +86,7 @@ class Backup(Simulation):
                 # Now that I'm aware of the corruption, remove the block_id from corrupted_blocks
                 uploader.corrupted_blocks.remove(block_id)
                 return  # Do not schedule the event
-            
+
         # === END EXTENSION === #
 
         block_size = downloader.block_size if restore else uploader.block_size
@@ -267,6 +277,9 @@ class NodeEvent(Event):
     def process(self, sim: Simulation):
         """Must be implemented by subclasses."""
         raise NotImplementedError
+    
+class DataCorrupted(NodeEvent):
+    """A block of the node (local of held for a remote peer) is corrupted."""
 
 # === EXTENSION: Data corruption === #
 # Event that puts blocks in a "corruption list" (mark it as "corrupted"), note that the keeper is not aware of the corruption of its block
