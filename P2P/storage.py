@@ -38,6 +38,10 @@ class Backup(Simulation):
         self.mean_local_storage_over_time = [] # added to keep track of the mean number of local storage over time for plotting
         self.mean_backup_storage_over_time = [] # added to keep track of the mean number of backup storage over time for plotting
 
+        self.online_nodes_over_time = [] # added to keep track of the number of online nodes over time for plotting
+        self.mean_local_storage_over_time = [] # added to keep track of the mean number of local storage over time for plotting
+        self.mean_backup_storage_over_time = [] # added to keep track of the mean number of backup storage over time for plotting
+
         # we add to the event queue the first event of each node going online and of failing
         for node in nodes:
             self.schedule(node.arrival_time, Online(node))
@@ -50,6 +54,13 @@ class Backup(Simulation):
                     self.schedule(exp_rv(node.integrity_delay), DataRecovered(node))
                 #self.schedule(parse_timespan(GetStatistics.schedulation), GetStatistics()) # called after num of seconds in a year
 
+            # to enable extension (1)
+            if(extension):
+                self.schedule(exp_rv(node.corruption_delay), DataCorrupted(node))
+                # to enable recovery mode (extension (2))
+                if(extension == '2'):
+                    self.schedule(exp_rv(node.integrity_delay), DataRecovered(node))
+
     def schedule_transfer(self, uploader: 'Node', downloader: 'Node', block_id: int, restore: bool):
         """Helper function called by `Node.schedule_next_upload` and `Node.schedule_next_download`.
 
@@ -57,7 +68,7 @@ class Backup(Simulation):
         the uploader.
         """
 
-        # === EXTENSION: Check for corrupted blocks and invalidate them if necessary === #
+        # === EXTENSION: Check for corrupted blocks and invalidate (mark "LOST") them if necessary === #
         if restore:
             # Check if the block is in corrupted_blocks as a tuple (downloader, block_id)
             if (downloader, block_id) in uploader.corrupted_blocks:
@@ -75,6 +86,8 @@ class Backup(Simulation):
                 # Now that I'm aware of the corruption, remove the block_id from corrupted_blocks
                 uploader.corrupted_blocks.remove(block_id)
                 return  # Do not schedule the event
+
+        # === END EXTENSION === #
 
         block_size = downloader.block_size if restore else uploader.block_size
 
@@ -130,8 +143,8 @@ class Node:
 
     arrival_time: float  # time at which the node will come online
 
-    corruption_delay: float # rate at which blocks are corrupted
-    integrity_delay: float # rate at which blocks are recovered
+    corruption_delay: float # added: rate at which blocks are corrupted
+    integrity_delay: float # added: rate at which blocks are recovered
 
     def __post_init__(self):
         """Compute other data dependent on config values and set up initial state."""
@@ -165,9 +178,8 @@ class Node:
         self.current_upload: Optional[TransferComplete] = None
         self.current_download: Optional[TransferComplete] = None
 
-        # EXTENSION
-        self.corrupted_blocks = set()
-        self.corrupted_blocks_over_time: List[tuple[float, int]] = []
+        self.corrupted_blocks = set() # added, initialize corrupted_blocks
+        self.corrupted_blocks_over_time: List[tuple[float, int]] = [] # added, initialize corrupted_blocks_over_time
 
     def find_block_to_back_up(self):
         """Returns the block id of a block that needs backing up, or None if there are none."""
@@ -269,6 +281,11 @@ class NodeEvent(Event):
 class DataCorrupted(NodeEvent):
     """A block of the node (local of held for a remote peer) is corrupted."""
 
+# === EXTENSION: Data corruption === #
+# Event that puts blocks in a "corruption list" (mark it as "corrupted"), note that the keeper is not aware of the corruption of its block
+class DataCorrupted(NodeEvent):
+    """A block of the node (local of held for a remote peer) is corrupted."""
+
     def process(self, sim: Backup):
         node = self.node
 
@@ -305,7 +322,8 @@ class DataCorrupted(NodeEvent):
             years = int(str(format_timespan(sim.t)).split(' ')[0])
         node.corrupted_blocks_over_time.append((years, len(node.corrupted_blocks)))
 
-# class DataRecovered(NodeEvent) that checks all the blocks of the node and if they are corrupted, it removes them from the set of corrupted blocks and invalidates them as in the schedule_transfer function
+# === EXTENSION: Data recover === # 
+# Event that checks all the blocks of the node and if they are corrupted, it removes them from the set of corrupted blocks and invalidates them as in the schedule_transfer function
 class DataRecovered(NodeEvent):
 
     def process(self, sim: Backup):
@@ -337,6 +355,8 @@ class DataRecovered(NodeEvent):
                 node.local_blocks[block_id] = False  # Set False in local_blocks
                 # Now that I'm aware of the corruption, remove the block_id from corrupted_blocks
                 node.corrupted_blocks.remove(block_id)
+        
+        # From this moment, the system will try to restore the block, aware that previously it has been corrupted and lost 
 
 class Online(NodeEvent):
     """A node goes online."""
