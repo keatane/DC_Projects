@@ -1,2 +1,1 @@
-# DC_Projects
-A place to store all Distributed Computing course stuff
+Cattaneo Kevin - 4944382 & Foschi Lorenzo - 4989646
