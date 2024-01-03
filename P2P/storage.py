@@ -278,9 +278,6 @@ class NodeEvent(Event):
         """Must be implemented by subclasses."""
         raise NotImplementedError
     
-class DataCorrupted(NodeEvent):
-    """A block of the node (local of held for a remote peer) is corrupted."""
-
 # === EXTENSION: Data corruption === #
 # Event that puts blocks in a "corruption list" (mark it as "corrupted"), note that the keeper is not aware of the corruption of its block
 class DataCorrupted(NodeEvent):
